@@ -12,6 +12,7 @@ from .size import VDC_SIZE, PROXY_FARM, FARM_DISCOUNT
 from .wallet import VDC_WALLET_FACTORY
 from .zdb_auto_topup import ZDBMonitor
 import netaddr
+import shlex
 
 VDC_WORKLOAD_TYPES = [
     WorkloadType.Container,
@@ -548,3 +549,30 @@ class UserVDC(Base):
             diff = float(vdc_cost) - float(current_balance)
             j.logger.info(f"funding diff: {diff} for vdc {self.vdc_name} from wallet: {funding_wallet_name}")
             self.pay_amount(dst_wallet.address, diff, wallet)
+
+    def get_public_ip(self, load_info=False):
+        if load_info:
+            self.load_info()
+        for node in self.kubernetes:
+            if node.public_ip == "::/128":
+                continue
+            return node.public_ip
+        if load_info:
+            return None
+        return self.get_public_ip(load_info=True)
+
+    def expose_port(self, resource, internal_port, external_port):
+        ip = self.get_public_ip()
+        ssh_client = j.clients.sshclient.get(self.vdc_name, user="rancher", host=ip, sshkey=self.vdc_name)
+        rc, out, err = ssh_client.sshclient.run(
+            f"nohup kubeclt port-forward {shlex.quote(resource)} {internal_port}:{external_port} &> /dev/null &",
+            warn=True,
+        )
+
+    def remove_exposed_port(self, external_port):
+        ip = self.get_public_ip()
+        ssh_client = j.clients.sshclient.get(self.vdc_name, user="rancher", host=ip, sshkey=self.vdc_name)
+        rc, out, err = ssh_client.sshclient.run(
+            f"kill `ps aux | grep '[k]ubectl port-forward' | grep ':{external_port}' | tr -s ' ' | cut -d ' ' -f 2`",
+            warn=True,
+        )
